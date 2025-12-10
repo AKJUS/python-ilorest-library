@@ -167,8 +167,8 @@ class HpIlo(object):
         """
         LOGGER.info("Starting chif packet exchange...")
 
-        LOGGER.debug(f"Data ready to be sent...")
-        #LOGGER.debug(f"Data to be sent: {data[:50]}... (first 50 bytes)")
+        LOGGER.debug("Data ready to be sent...")
+        # LOGGER.debug(f"Data to be sent: {data[:50]}... (first 50 bytes)")
 
         datarecv = self.dll.get_max_buffer_size()
         buff = create_string_buffer(bytes(data))
@@ -198,8 +198,8 @@ class HpIlo(object):
             pkt = bytearray(recbuff[:])
         else:
             pkt = bytearray(recbuff[:datarecv])
-            LOGGER.debug(f"Received data...")
-            #LOGGER.debug(f"Received data: {pkt[:50]}... (first 50 bytes)")
+            LOGGER.debug("Received data...")
+            # LOGGER.debug(f"Received data: {pkt[:50]}... (first 50 bytes)")
 
         return pkt
 

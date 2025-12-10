@@ -121,8 +121,8 @@ class LoadWorker(threading.Thread):
 
                 theobj.update_member(resp=resp, path=path, init=init)
 
-                fpath = (
-                    lambda pa, path: path
+                fpath = lambda pa, path: (
+                    path
                     if pa.endswith(theobj.typepath.defs.hrefstring) and pa.startswith((theobj.collstr, "Entries"))
                     else None
                 )

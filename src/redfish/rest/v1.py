@@ -271,8 +271,13 @@ class RestClient(RestClientBase):
         self._cert_data = ca_cert_data
         self.login_otp = login_otp
         super(RestClient, self).__init__(
-            username=username, password=password, sessionid=sessionid, base_url=base_url, login_otp=login_otp,
-            session_location=session_location, **client_kwargs
+            username=username,
+            password=password,
+            sessionid=sessionid,
+            base_url=base_url,
+            login_otp=login_otp,
+            session_location=session_location,
+            **client_kwargs
         )
 
     def __enter__(self):
@@ -487,14 +492,18 @@ class RestClient(RestClientBase):
                 raise OneTimePasscodeError()
             elif "UnauthorizedLogin" in self.login_response:
                 if self.login_otp:
-                    raise UnauthorizedLoginAttemptError("Error " + str(
-                        self.login_return_code) + ". Login is unauthorized.\n"
-                                                  "Please check the credentials/OTP entered.\n")
+                    raise UnauthorizedLoginAttemptError(
+                        "Error " + str(self.login_return_code) + ". Login is unauthorized.\n"
+                        "Please check the credentials/OTP entered.\n"
+                    )
                 else:
                     self._credential_err()
             elif "TokenExpired" in self.login_response:
-                raise TokenExpiredError("Error " + str(
-                    self.login_return_code) + ". The OTP entered has expired. Please enter credentials again.\n")
+                raise TokenExpiredError(
+                    "Error "
+                    + str(self.login_return_code)
+                    + ". The OTP entered has expired. Please enter credentials again.\n"
+                )
         elif not self.session_key and not resp.status == 200:
             self._credential_err()
         else:

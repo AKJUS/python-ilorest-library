@@ -55,10 +55,12 @@ class InvalidCommandLineError(RdmcError):
 
     pass
 
+
 class TfaEnablePreRequisiteError(RdmcError):
     """Raised when pre-requisites not met while enabling TFA"""
 
     pass
+
 
 class FailureDuringCommitError(RdmcError):
     """Raised when there is an error while committing."""
@@ -432,9 +434,7 @@ class RmcFileCacheManager(RmcCacheManager):
                 ilo=self._rmc.typepath.ilogen,
                 iloversion=self._rmc.typepath.iloversion,
                 proxy=self._rmc.redfishinst.proxy,
-                ca_cert_data=self._rmc.redfishinst.connection._connection_properties
-                if self._rmc.redfishinst.connection._connection_properties
-                else dict(),
+                ca_cert_data=self._rmc.redfishinst._cert_data if self._rmc.redfishinst._cert_data else dict(),
             )
 
             clients_data = dict(

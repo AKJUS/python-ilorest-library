@@ -42,6 +42,7 @@ from redfish.hpilo.risblobstore2 import (
 )
 from redfish.hpilo.rishpilo import HpIloChifPacketExchangeError
 from redfish.rest.containers import RestRequest, RestResponse, RisRestResponse
+from redfish.security_masking import SecurityMasker
 
 # ---------End of imports---------
 
@@ -130,8 +131,8 @@ class HttpConnection(object):
         self.base_url = base_url
         # Default values for connection properties
         self._connection_properties = {
-            'timeout': urllib3.util.Timeout(connect=4800, read=4800),
-            'retries': urllib3.util.Retry(connect=50, read=50, redirect=50),
+            "timeout": urllib3.util.Timeout(connect=4800, read=4800),
+            "retries": urllib3.util.Retry(connect=50, read=50, redirect=50),
         }
         self._connection_properties.update(client_kwargs)
         if cert_data:
@@ -157,41 +158,42 @@ class HttpConnection(object):
 
     def _init_connection(self):
         """Function for initiating connection with remote server"""
+        # For certificate-based authentication, we don't verify the server's certificate
+        # We're providing our client certificate to authenticate TO the server
         cert_reqs = "CERT_NONE"
+
         if self._connection_properties.get("ca_cert_data"):
-            LOGGER.info("Using CA cert to confirm identity.")
-            cert_reqs = "CERT_NONE"
-            self._connection_properties.update(self._connection_properties.pop("ca_cert_data"))
+            LOGGER.info("Using certificate-based authentication.")
+            ca_cert_data = self._connection_properties.pop("ca_cert_data")
+
+            # Extract certificate files
+            cert_file = ca_cert_data.get("cert_file")
+            key_file = ca_cert_data.get("key_file")
+            ca_certs = ca_cert_data.get("ca_certs")
+
+            # Add client certificate and key for authentication
+            if cert_file:
+                self._connection_properties["cert_file"] = cert_file
+            if key_file:
+                self._connection_properties["key_file"] = key_file
+
+            # If CA certs provided, use them to verify server certificate
+            if ca_certs:
+                self._connection_properties["ca_certs"] = ca_certs
+                cert_reqs = "CERT_REQUIRED"
+                LOGGER.info("Server certificate verification enabled with provided CA.")
 
         if self.proxy:
             if self.proxy.startswith("socks"):
                 LOGGER.info("Initializing a SOCKS proxy.")
-                http = SOCKSProxyManager(
-                    self.proxy,
-                    cert_reqs=cert_reqs,
-                    maxsize=50,
-                    **self._connection_properties
-                )
+                http = SOCKSProxyManager(self.proxy, cert_reqs=cert_reqs, maxsize=50, **self._connection_properties)
             else:
                 LOGGER.info("Initializing a HTTP proxy.")
-                http = ProxyManager(
-                    self.proxy,
-                    cert_reqs=cert_reqs,
-                    maxsize=50,
-                    **self._connection_properties
-                )
+                http = ProxyManager(self.proxy, cert_reqs=cert_reqs, maxsize=50, **self._connection_properties)
         else:
             LOGGER.info("Initializing no proxy.")
-            try:
-                self._connection_properties.pop("ca_cert_data")
-            except KeyError:
-                pass
 
-            http = PoolManager(
-                cert_reqs=cert_reqs,
-                maxsize=50,
-                **self._connection_properties
-            )
+            http = PoolManager(cert_reqs=cert_reqs, maxsize=50, **self._connection_properties)
 
         self._conn = http.request
 
@@ -275,19 +277,15 @@ class HttpConnection(object):
                         raise KeyError()
                 if restreq.method in ["POST", "PATCH"]:
                     debugjson = json.loads(restreq.body)
-                    if "Password" in debugjson.keys():
-                        debugjson["Password"] = "******"
-                    if "OldPassword" in debugjson.keys():
-                        debugjson["OldPassword"] = "******"
-                    if "NewPassword" in debugjson.keys():
-                        debugjson["NewPassword"] = "******"
-                    logbody = json.dumps(debugjson)
+                    debugjson_masked = SecurityMasker.mask_simple_body(debugjson)
+                    logbody = json.dumps(debugjson_masked)
                     logbody = logbody.replace("\\\\", "\\")
+                headers_masked = SecurityMasker.mask_http_headers(headers)
                 LOGGER.debug(
                     "HTTP REQUEST: %s\n\tPATH: %s\n\t" "HEADERS: %s\n\tBODY: %s",
                     restreq.method,
                     restreq.path,
-                    headers,
+                    headers_masked,
                     logbody,
                 )
             except:
@@ -336,13 +334,16 @@ class HttpConnection(object):
                 for kiy, headerval in respheader.items():
                     headerstr += "\t" + kiy + ": " + headerval + "\n"
                 try:
+                    headerstr_masked = SecurityMasker.mask_http_headers(headerstr)
+                    response_body = SecurityMasker.mask_simple_body(restresp.read)
+
                     LOGGER.debug(
                         "HTTP RESPONSE for %s:\nCode:%s\nHeaders:" "\n%s\nBody Response of %s: %s",
                         restresp.request.path,
                         str(restresp._http_response.status) + " " + restresp._http_response.reason,
-                        headerstr,
+                        headerstr_masked,
                         restresp.request.path,
-                        restresp.read,
+                        response_body,
                     )
                 except:
                     LOGGER.debug("HTTP RESPONSE:\nCode:%s", restresp)
@@ -501,7 +502,7 @@ class Blobstore2Connection(object):
             if isinstance(body, bytearray):
                 str1 = bytearray(str1.encode("utf-8")) + body
             else:
-                #if isinstance(body, bytes):
+                # if isinstance(body, bytes):
                 #    body = body.decode("utf-8")
                 str1 += body
 
@@ -518,18 +519,13 @@ class Blobstore2Connection(object):
                         raise
                 if method in ["POST", "PATCH"]:
                     debugjson = json.loads(body)
-                    if "Password" in debugjson.keys():
-                        debugjson["Password"] = "******"
-                    if "OldPassword" in debugjson.keys():
-                        debugjson["OldPassword"] = "******"
-                    if "NewPassword" in debugjson.keys():
-                        debugjson["NewPassword"] = "******"
-                    logbody = json.dumps(debugjson)
-
+                    debugjson_masked = SecurityMasker.mask_simple_body(debugjson)
+                    logbody = json.dumps(debugjson_masked)
+                headers_masked = SecurityMasker.mask_http_headers(headers)
                 LOGGER.debug(
                     "Blobstore REQUEST: %s\n\tPATH: %s\n\tHEADERS: " "%s\n\tBODY: %s",
                     method,
-                    str(headers),
+                    str(headers_masked),
                     path,
                     logbody,
                 )
@@ -594,13 +590,15 @@ class Blobstore2Connection(object):
                 for header in headerget:
                     headerstr += "\t" + header + ": " + headerget[header] + "\n"
                 try:
+                    response_body = SecurityMasker.mask_complex_body(rest_response.read)
+
                     LOGGER.debug(
                         "Blobstore RESPONSE for %s:\nCode: %s\nHeaders:" "\n%s\nBody of %s: %s",
                         rest_response.request.path,
                         str(rest_response._http_response.status) + " " + rest_response._http_response.reason,
                         headerstr,
                         rest_response.request.path,
-                        rest_response.read,
+                        response_body,
                     )
                 except:
                     LOGGER.debug(

@@ -60,14 +60,12 @@ class Typesandpathdefines(object):
         self.flagiften = False
         self.adminpriv = True
 
-    def iLO7VersionCheck(self,rootresp):
+    def iLO7VersionCheck(self, rootresp):
         if "Oem" in rootresp:
             if "Hpe" in rootresp["Oem"]:
-                gen = next(iter(rootresp.get("Oem", {}).get("Hpe", {}).get("Manager", {}))).get("ManagerType",
-                                                                                                None)
+                gen = next(iter(rootresp.get("Oem", {}).get("Hpe", {}).get("Manager", {}))).get("ManagerType", None)
             elif "Hp" in rootresp["Oem"]:
-                gen = next(iter(rootresp.get("Oem", {}).get("Hp", {}).get("Manager", {}))).get("ManagerType",
-                                                                                               None)
+                gen = next(iter(rootresp.get("Oem", {}).get("Hp", {}).get("Manager", {}))).get("ManagerType", None)
             else:
                 raise Exception("Malformed Json")
             if gen:
@@ -171,9 +169,7 @@ class Typesandpathdefines(object):
                         self.is_redfish = True
 
             if try_count > 1:
-                raise ServerDownOrUnreachableError(
-                    "Server not reachable or does not support " "HPRest or Redfish \n"
-                )
+                raise ServerDownOrUnreachableError("Server not reachable or does not support " "HPRest or Redfish \n")
 
             rootresp = client.root.obj
             self.rootresp = rootresp
@@ -187,8 +183,12 @@ class Typesandpathdefines(object):
                 )
                 comp = "Hp" if self.gencompany else None
                 comp = "Hpe" if rootresp.get("Oem", {}).get("Hpe", None) else comp
-                if comp and next(iter(rootresp.get("Oem", {}).get(comp, {}).get("Manager", {}))).get("ManagerType", None):
-                    self.ilogen = next(iter(rootresp.get("Oem", {}).get(comp, {}).get("Manager", {}))).get("ManagerType")
+                if comp and next(iter(rootresp.get("Oem", {}).get(comp, {}).get("Manager", {}))).get(
+                    "ManagerType", None
+                ):
+                    self.ilogen = next(iter(rootresp.get("Oem", {}).get(comp, {}).get("Manager", {}))).get(
+                        "ManagerType"
+                    )
                     self.ilover = next(iter(rootresp.get("Oem", {}).get(comp, {}).get("Manager", {}))).get(
                         "ManagerFirmwareVersion"
                     )
@@ -201,7 +201,8 @@ class Typesandpathdefines(object):
             else:
                 self.ilogen = next(iter(rootresp.get("Oem", {}).get("Hpe", {}).get("Manager", {}))).get("ManagerType")
                 self.ilover = next(iter(rootresp.get("Oem", {}).get("Hpe", {}).get("Manager", {}))).get(
-                    "ManagerFirmwareVersion",None)
+                    "ManagerFirmwareVersion", None
+                )
                 if self.ilover is None:
                     self.ilover = "1.01.01"
                 self.iloversion = float(self.ilogen.split(" ")[-1] + "." + "".join(self.ilover.split(".")))
@@ -236,7 +237,6 @@ class Typesandpathdefines(object):
         :param rootobj: The root path data.
         :type rootobj: dict.
         """
-        iLO7 = False
         if self.iLO7VersionCheck(rootobj):
             self.gencompany = "Hpe"
         else:

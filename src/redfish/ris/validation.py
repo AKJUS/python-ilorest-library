@@ -223,9 +223,11 @@ class ValidationManager(object):
         if result:
             result = max(
                 result,
-                key=lambda res: res[Typepathforval.typepath.defs.hrefstring]
-                if res.get(Typepathforval.typepath.defs.hrefstring, None)
-                else res[keyword],
+                key=lambda res: (
+                    res[Typepathforval.typepath.defs.hrefstring]
+                    if res.get(Typepathforval.typepath.defs.hrefstring, None)
+                    else res[keyword]
+                ),
             )
             schemapath = self.geturidict(result["Location"][0])
             self.monolith.load(path=schemapath, crawl=False, loadtype="ref")

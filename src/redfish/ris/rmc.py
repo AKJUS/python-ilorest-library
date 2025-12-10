@@ -265,7 +265,7 @@ class RmcApp(object):
             isredfish=is_redfish,
             login_otp=login_otp,
             log_dir=log_dir,
-            session_location=session_location
+            session_location=session_location,
         )
         if user_ca_cert_data and self.typepath.iloversion < 5.23:
             raise IncompatibleiLOVersionError(
@@ -295,8 +295,8 @@ class RmcApp(object):
         resp = self.get_handler(self.typepath.defs.managerpath, service=False, silent=True).dict
         ver = resp["FirmwareVersion"]
         if "iLO" not in ver:
-            self.typepath.ilover = (ver.split(" ")[0])
-            self.typepath.ilover = float(self.typepath.ilover.replace('.', ''))
+            self.typepath.ilover = ver.split(" ")[0]
+            self.typepath.ilover = float(self.typepath.ilover.replace(".", ""))
         inittime = time.time()
 
         self._build_monolith(path=path, includelogs=includelogs, skipbuild=skipbuild, json_out=json_out)
@@ -311,6 +311,8 @@ class RmcApp(object):
                 path=self.typepath.defs.startpath,
                 init=False,
             )
+
+        return self.current_client
 
     def logout(self, url=None):
         """Performs a logout of the server and prepares the app for another system, setting app
@@ -994,14 +996,7 @@ class RmcApp(object):
         return results
 
     def put_handler(
-        self,
-        put_path,
-        body,
-        headers=None,
-        silent=False,
-        optionalpassword=None,
-        service=False,
-        noauth=False
+        self, put_path, body, headers=None, silent=False, optionalpassword=None, service=False, noauth=False
     ):
         """Performs the client HTTP PUT operation with monolith and response handling support.
         Response handling will output to logger or string depending on showmessages app argument.
@@ -1248,7 +1243,6 @@ class RmcApp(object):
                 iloversion = float(".".join(iloversionlist[1:3]))
             except:
                 iloversion = float(iloversionlist[0])
-
 
             model = self.getprops("Manager.", ["Model"])
             if model:
@@ -1743,23 +1737,26 @@ class RmcApp(object):
     def token_exists(self, app_obj):
         return app_obj.apptoken_exists()
 
+    def reactivate_token(self, app_obj):
+        return app_obj.reactivate_apptoken()
+
     def vnic_login(
-            self,
-            app_obj=None,
-            path=None,
-            skipbuild=False,
-            includelogs=False,
-            json_out=False,
-            base_url=None,
-            username=None,
-            password=None,
-            log_dir=None,
-            login_otp=None,
-            is_redfish=False,
-            proxy=None,
-            user_ca_cert_data=None,
-            biospassword=None,
-            sessionid=None,
+        self,
+        app_obj=None,
+        path=None,
+        skipbuild=False,
+        includelogs=False,
+        json_out=False,
+        base_url=None,
+        username=None,
+        password=None,
+        log_dir=None,
+        login_otp=None,
+        is_redfish=False,
+        proxy=None,
+        user_ca_cert_data=None,
+        biospassword=None,
+        sessionid=None,
     ):
         # Calling libhpsrv function to get session token
         session_location = ""
@@ -1771,7 +1768,7 @@ class RmcApp(object):
         if not session_key or not session_location:
             raise Exception("Empty Session Id or Session Location was returned.\n")
 
-        self.login(
+        response = self.login(
             username=username,
             password=password,
             sessionid=session_key,
@@ -1788,6 +1785,7 @@ class RmcApp(object):
             log_dir=log_dir,
             session_location=session_location,
         )
+        return response
 
     def vexists(self, app_obj):
         # app_obj = Appaccount()

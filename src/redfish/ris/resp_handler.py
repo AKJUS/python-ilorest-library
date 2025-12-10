@@ -232,9 +232,11 @@ class ResponseHandler(object):
                 if not dl_reg:
                     for inst in data_extract:
                         if [key.lower() for key in inst.keys()] not in [erk.lower() for erk in err_response_keys]:
-                            if "messageid" in [str(key.lower()) for key in inst.keys()]:
-                                inst.update(self.get_error_messages(inst[key]))
-                                continue
+                            # Find the key that matches 'messageid' (case-insensitive)
+                            for key in inst.keys():
+                                if key.lower() == "messageid":
+                                    inst.update(self.get_error_messages(inst[key]))
+                                    break
             finally:
                 return data_extract
         else:

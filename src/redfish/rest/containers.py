@@ -235,7 +235,11 @@ class RestResponse(object):
         try:
             return json.loads(self.read)
         except ValueError as exp:
-            if self.path != "/smbios" and self.path != "/cgi-bin/uploadFile" and "/redfish/v1/Systems/1/Storage/" not in self.path :
+            if (
+                self.path != "/smbios"
+                and self.path != "/cgi-bin/uploadFile"
+                and "/redfish/v1/Systems/1/Storage/" not in self.path
+            ):
                 sys.stderr.write("An invalid response body was returned: %s" % exp)
             return None
 
@@ -313,11 +317,11 @@ class RisRestResponse(RestResponse):
             resp_txt = "".join(map(chr, resp_txt))
         self._respfh = StringIO(resp_txt)
         self._socket = _FakeSocket(bytearray(list(map(ord, self._respfh.read()))))
-        #self._respfh = BytesIO(resp_txt.encode('utf-8'))
-        #self._socket = _FakeSocket(bytearray(self._respfh.read()))
+        # self._respfh = BytesIO(resp_txt.encode('utf-8'))
+        # self._socket = _FakeSocket(bytearray(self._respfh.read()))
 
         response = http_client.HTTPResponse(self._socket)
-        #response = response.decode('utf-8')
+        # response = response.decode('utf-8')
         response.begin()
         response.data = response.read()
         response.headers = {ki[0]: ki[1] for ki in response.getheaders()}

@@ -19,17 +19,21 @@
 
 from redfish.rest.connections import ChifDriverMissingOrNotFound, VnicNotEnabledError
 from redfish.rest.v1 import InvalidCredentialsError
-from ctypes import *
 import logging
-import os
+from ctypes import (
+    POINTER,
+    byref,
+    c_bool,
+    c_char_p,
+    c_int,
+    c_uint8,
+    c_wchar_p,
+    create_string_buffer,
+)
 
 from redfish.hpilo.risblobstore2 import BlobStore2
 from redfish.hpilo.rishpilo import BlobReturnCodes
 
-if os.name == "nt":
-    from ctypes import windll
-else:
-    from _ctypes import dlclose
 
 # ---------End of imports---------
 # ---------Debug logger---------
@@ -39,6 +43,17 @@ LOGGER = logging.getLogger(__name__)
 
 class GenerateAndSaveAccountError(Exception):
     """Raised when errors occured while generating and saving app account"""
+
+    pass
+
+
+class ReactivateAppAccountTokenError(Exception):
+    """Raised when errors occurred while reactivating app account"""
+
+    pass
+
+class InactiveAppAccountTokenError(Exception):
+    """Raised when inactive app account token"""
 
     pass
 
@@ -101,6 +116,11 @@ class AppAccount(object):
         self.password = password
         self.log_dir = log_dir
 
+        LOGGER.debug(
+            f"Initialization parameters - AppName: {self.appname.decode('utf-8')}, "
+            f"Salt: {self.salt.decode('utf-8')}, Username: {self.username if self.username else 'None'}"
+        )
+
         if log_dir and LOGGER.isEnabledFor(logging.DEBUG):
             logdir_c = create_string_buffer(log_dir.encode("utf-8"))
             self.dll.enabledebugoutput(logdir_c)
@@ -116,15 +136,19 @@ class AppAccount(object):
         self.dll.ExpandAppid.argtypes = [c_char_p, POINTER(c_char_p)]
         self.dll.ExpandAppid.restype = c_int
 
-        host_app_id_c = c_char_p(appid.encode('utf-8'))
+        host_app_id_c = c_char_p(appid.encode("utf-8"))
         expanded_app_id_c = c_char_p(None)
 
+        LOGGER.debug(f"Calling ExpandAppid with AppID: {appid}")
         ret = self.dll.ExpandAppid(host_app_id_c, byref(expanded_app_id_c))
         if ret:
-            LOGGER.error("Error occured while locating the application account.")
+            LOGGER.error(f"Failed to expand App ID {appid} (Return code: {ret})")
             raise AppAccountExistsError()
 
-        return expanded_app_id_c.value.decode('utf-8') if expanded_app_id_c else None
+        expanded_id = expanded_app_id_c.value.decode("utf-8") if expanded_app_id_c else None
+        if LOGGER.isEnabledFor(logging.DEBUG):
+            LOGGER.debug(f"Successfully expanded App ID {appid} to {expanded_id}")
+        return expanded_id
 
     def generate_and_save_apptoken(self):
         """Generate and save an application account, logging each step."""
@@ -158,9 +182,34 @@ class AppAccount(object):
             LOGGER.critical("Unknown return code: %d", returncode)
             raise GenerateAndSaveAccountError()
 
+    def reactivate_apptoken(self):
+        """Reactivate an application account, logging each step."""
+        LOGGER.info("Starting reactivate_apptoken process.")
+
+        self.dll.ReactivateAppToken.argtypes = [c_char_p, c_char_p, c_char_p, c_char_p, c_char_p]
+        self.dll.ReactivateAppToken.restype = c_int
+
+        user_name = self.username.encode("utf-8")
+        password = self.password.encode("utf-8")
+
+        LOGGER.debug("Calling ReactivateAppToken for AppID: %s", self.appid.decode("utf-8"))
+
+        return_code = self.dll.ReactivateAppToken(self.appid, self.appname, self.salt, user_name, password)
+
+        if return_code == BlobReturnCodes.SUCCESS:
+            LOGGER.info("Application account has been reactivated successfully.")
+            return BlobReturnCodes.SUCCESS
+        elif return_code == -8:
+            LOGGER.error("Please enter valid credentials.")
+            raise InvalidCredentialsError(0)
+        else:
+            LOGGER.critical("Unknown return code: %d", return_code)
+            raise ReactivateAppAccountTokenError()
+
     def remove_apptoken(self):
         returncode = 1
         if self.username and self.password:
+            LOGGER.debug(f"Using credentials to remove for AppID: {self.appid.decode('utf-8')}")
             self.dll.DeleteAppTokenUsingCreds.argtypes = [c_char_p, c_char_p, c_char_p]
             self.dll.DeleteAppTokenUsingCreds.restype = c_int
             self.username = self.username.encode("utf-8")
@@ -168,9 +217,12 @@ class AppAccount(object):
             returncode = self.dll.DeleteAppTokenUsingCreds(self.appid, self.username, self.password)
 
         elif self.appname and self.salt:
+            LOGGER.debug(f"Using app details to remove for AppID : {self.appid.decode('utf-8')}")
             self.dll.DeleteAppToken.argtypes = [c_char_p, c_char_p, c_char_p]
             self.dll.DeleteAppToken.restype = c_int
             returncode = self.dll.DeleteAppToken(self.appid, self.appname, self.salt)
+
+        LOGGER.debug(f"Delete operation returned code: {returncode}")
 
         if returncode == BlobReturnCodes.SUCCESS:
             return BlobReturnCodes.SUCCESS
@@ -187,13 +239,16 @@ class AppAccount(object):
         self.dll.AppIdExistsinTPM.restype = c_int
 
         vexists = c_bool(False)
+        LOGGER.debug(f"Checking existence for AppID: {self.appid.decode('utf-8')}")
         returncode = self.dll.AppIdExistsinTPM(self.appid, byref(vexists))
+        LOGGER.debug(f"AppIdExistsinTPM returned: {returncode}")
 
         if returncode == BlobReturnCodes.SUCCESS:
             LOGGER.info("app account existence check completed. Exists: %s", vexists.value)
             return vexists.value
         else:
-            LOGGER.error("Error occurred while checking if application account exists.")
+            LOGGER.error("Failed to check account existence")
+            LOGGER.debug(f"Failed with return code: {returncode}")
             raise AppAccountExistsError()
 
     def vlogin(self):
@@ -205,18 +260,28 @@ class AppAccount(object):
         session_location = c_char_p()
         errorcode = 0
 
+        LOGGER.debug(f"Attempting login for AppID: {self.appid.decode('utf-8')}")
         try:
-            errorcode = self.dll.GetSessionID(self.appid, self.appname, self.salt, byref(session_id),
-                                              byref(session_location))
-            if errorcode != BlobReturnCodes.SUCCESS:
+            errorcode = self.dll.GetSessionID(
+                self.appid, self.appname, self.salt, byref(session_id), byref(session_location)
+            )
+            LOGGER.debug(f"GetSessionID returned code: {errorcode}")
+            if errorcode == 2:
+                raise InactiveAppAccountTokenError()
+            elif errorcode != BlobReturnCodes.SUCCESS:
                 raise Exception
             session_id = session_id.value.decode()
             session_location = session_location.value.decode()
             session_location = "/" + session_location.split("/", 3)[-1]
-            LOGGER.info("VNIC login successful. Session Location: %s, Session ID: ****%s",
-                        session_location, session_id[-4:])
+            LOGGER.debug("Successfully decoded session information")
+            LOGGER.info(
+                "VNIC login successful. Session Location: %s, Session ID: ****%s", session_location, session_id[-4:]
+            )
 
             return session_id, session_location
+        except InactiveAppAccountTokenError:
+            LOGGER.error("Login failed due to an inactive or expired App Account token.")
+            raise InactiveAppAccountTokenError()
         except Exception as excp:
             LOGGER.error("VNIC login failed: %s", str(excp))
             raise VnicLoginError()
@@ -226,7 +291,9 @@ class AppAccount(object):
         LOGGER.info("Checking if VNIC is ready for use.")
 
         self.dll.ReadyToUse.restype = c_int
+        LOGGER.debug("Calling ReadyToUse")
         status = self.dll.ReadyToUse()
+        LOGGER.debug(f"ReadyToUse returned status: {status}")
 
         if status == BlobReturnCodes.SUCCESS:
             LOGGER.info("VNIC is ready for use.")
@@ -249,25 +316,39 @@ class AppAccount(object):
             self.appid = "self_register".encode("utf-8")
 
         returncode = self.dll.DetectILO(self.appid, byref(ilo_type), byref(security_state))
+        LOGGER.debug(f"DetectILO returned: type={ilo_type.value}, security={security_state.value}, code={returncode}")
 
         if returncode == BlobReturnCodes.SUCCESS:
-            LOGGER.info("iLO version successfully detected: %d, Security State: %d",
-                        ilo_type.value, security_state.value)
+            LOGGER.info(
+                "iLO version successfully detected: %d, Security State: %d", ilo_type.value, security_state.value
+            )
             return ilo_type.value, security_state.value
         elif returncode == -1 and ilo_type.value == 100:
-            LOGGER.info("Detectilo returned ilotype: %d, Security State: %d, "
-                        "returncode: %d", ilo_type.value, security_state.value, returncode)
+            LOGGER.info(
+                "Detectilo returned ilotype: %d, Security State: %d, " "returncode: %d",
+                ilo_type.value,
+                security_state.value,
+                returncode,
+            )
             raise ChifDriverMissingOrNotFound()
         elif returncode == -50 and ilo_type.value == 101:
-            LOGGER.info("Detectilo returned ilotype: %d, Security State: %d, "
-                        "returncode: %d", ilo_type.value, security_state.value, returncode)
+            LOGGER.info(
+                "Detectilo returned ilotype: %d, Security State: %d, " "returncode: %d",
+                ilo_type.value,
+                security_state.value,
+                returncode,
+            )
             raise VnicNotEnabledError()
         elif returncode == -2:
             LOGGER.info("Invalid parameters were passed in the command line. Detectilo iLO returncode: -2")
             raise InvalidCommandLineError()
         else:
-            LOGGER.info("Detectilo returned ilotype: %d, Security State: %d, "
-                        "returncode: %d", ilo_type.value, security_state.value, returncode)
+            LOGGER.info(
+                "Detectilo returned ilotype: %d, Security State: %d, " "returncode: %d",
+                ilo_type.value,
+                security_state.value,
+                returncode,
+            )
             LOGGER.error("Failed to detect iLO version.")
             raise GenBeforeLoginError()
 
@@ -275,8 +356,10 @@ class AppAccount(object):
         """Retrieve the IP address of the iLO interface."""
         LOGGER.info("Retrieving IP address.")
 
+        LOGGER.debug("Calling GetIPAddress")
         self.dll.GetIPAddress.restype = c_wchar_p
         ip_addr = self.dll.GetIPAddress()
+        LOGGER.debug(f"GetIPAddress returned: {ip_addr if ip_addr else 'None'}")
 
         LOGGER.info("IP address retrieved: %s", ip_addr)
         return ip_addr

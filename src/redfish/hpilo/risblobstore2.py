@@ -29,7 +29,7 @@ import struct
 import string
 import time
 import ctypes
-from ctypes import POINTER, c_char_p, c_ubyte, c_uint, c_ushort, c_void_p, cdll, create_string_buffer
+from ctypes import POINTER, c_char_p, c_ubyte, c_uint, c_ushort, c_void_p, create_string_buffer
 
 from redfish.hpilo.rishpilo import BlobReturnCodes as hpiloreturncodes
 from redfish.hpilo.rishpilo import (
@@ -254,23 +254,26 @@ class BlobStore2(object):
         ptr = lib.get_info(name, namspace)
         data = ptr[: lib.size_of_infoRequest()]
         data = bytearray(data)
-
+        delay = self.delay
         while retries <= self.max_retries:
             LOGGER.debug(f"Attempt {retries+1}/{self.max_retries} - Sending request to iLO.")
 
             resp = self._send_receive_raw(data)
             errorcode = struct.unpack("<I", bytes(resp[8:12]))[0]
+            header = resp[:8].hex()
 
-            LOGGER.debug(f"Response received: errorcode={errorcode}")
+            LOGGER.debug(f"Response received - Error Code: {errorcode}, Headers: {header}, Size: {len(resp)} bytes")
 
             if errorcode == BlobReturnCodes.BADPARAMETER:
                 if retries < self.max_retries:
                     LOGGER.warning(
-                        f"BADPARAMETER error received. Retrying in {self.delay} seconds... ({retries+1}/{self.max_retries})"
+                        f"BADPARAMETER error received. Retrying in {delay} seconds... "
+                        f"({retries+1}/{self.max_retries})"
                     )
-                    time.sleep(self.delay)
+                    time.sleep(delay)
                     retries += 1
-                    self.delay += 0.05
+                    delay += 0.05
+                    continue
                 else:
                     LOGGER.error(f"Max retries ({self.max_retries}) exceeded. Raising Blob2OverrideError.")
                     raise Blob2OverrideError(errorcode)
@@ -284,7 +287,7 @@ class BlobStore2(object):
                 raise HpIloError(errorcode)
 
             else:
-                LOGGER.info(f"Request successful. Extracting response data.")
+                LOGGER.info("Request successful. Extracting response data.")
                 break
 
         response = resp[lib.size_of_responseHeaderBlob() :]
@@ -309,6 +312,7 @@ class BlobStore2(object):
             maxread = lib.max_read_size()
             readsize = lib.size_of_readRequest()
             readhead = lib.size_of_responseHeaderBlob()
+            LOGGER.debug(f"Read parameters: maxread={maxread}, readsize={readsize}, readhead={readhead}")
             self.unloadchifhandle(lib)
 
             # Get blob metadata
@@ -331,6 +335,7 @@ class BlobStore2(object):
                 LOGGER.debug("Bytes read in current fragment: %d", bytesread)
 
                 if bytesread == 0:
+                    LOGGER.debug(f"Zero bytes read in fragment. Fragment metadata: offset={bytes_read}, count={count}")
                     if retries < self.max_read_retries:
                         LOGGER.warning(
                             "Read attempt failed. Retrying (Attempt %d/%d).", retries + 1, self.max_read_retries
@@ -388,6 +393,11 @@ class BlobStore2(object):
             LOGGER.info("Sending fragmented read request to iLO.")
             resp = self._send_receive_raw(data)
 
+            # Check response error code
+            errorcode = struct.unpack("<I", bytes(resp[8:12]))[0]
+            LOGGER.debug(
+                f"Response received - Headers: Status={errorcode}, Size={len(resp)}, Expected Size={response_size}"
+            )
             if len(resp) < response_size:
                 LOGGER.warning("Received response smaller than expected. Padding response.")
                 resp = resp + b"\0" * (response_size - len(resp))
@@ -484,12 +494,13 @@ class BlobStore2(object):
 
         # Call the external library function
         try:
+            LOGGER.debug(f"Write fragment request: key={key}, namespace={namespace}, offset={offset}, count={count}")
             ptr = lib.write_fragment(offset, count, name, namespace)
         except Exception as e:
             LOGGER.error(f"Error while calling write_fragment for key: {key} in namespace: {namespace}: {e}")
             raise
 
-        LOGGER.debug(f"Received pointer for write_fragment call, preparing data for send.")
+        LOGGER.debug(f"Preparing write fragment data: request_size={count} bytes")
 
         sendpacket = ptr[: lib.size_of_writeRequest()]
 
@@ -498,8 +509,7 @@ class BlobStore2(object):
 
         dataarr = bytearray(sendpacket)
         dataarr.extend(memoryview(data))
-        LOGGER.debug(f"Data ready to be sent...")
-        #LOGGER.debug(f"Data to be sent: {dataarr[:50]}... (first 50 bytes)")
+        LOGGER.debug(f"Request metadata: offset={offset}, size={count}")
 
         # Send the data
         try:
@@ -542,7 +552,7 @@ class BlobStore2(object):
         ptr = lib.delete_blob(name, namspace)
         data = ptr[: lib.size_of_deleteRequest()]
         data = bytearray(data)
-
+        delay = self.delay
         while retries <= self.max_retries:
             LOGGER.debug(f"Attempt {retries + 1} of {self.max_retries}: Sending raw delete request.")
 
@@ -554,12 +564,14 @@ class BlobStore2(object):
 
             if errorcode == BlobReturnCodes.BADPARAMETER:
                 LOGGER.warning(
-                    f"BADPARAMETER error received (retries left: {self.max_retries - retries}). Retrying after {self.delay} seconds."
+                    f"BADPARAMETER error received (retries left: {self.max_retries - retries}). "
+                    f"Retrying after {delay} seconds."
                 )
                 if retries < self.max_retries:
-                    time.sleep(self.delay)
+                    time.sleep(delay)
                     retries += 1
-                    self.delay += 0.05
+                    delay += 0.05
+                    continue
                 else:
                     LOGGER.warning(f"Max retries reached. Unable to delete blob key={key}. Raising Blob2OverrideError.")
                     raise Blob2OverrideError(errorcode)
@@ -677,7 +689,8 @@ class BlobStore2(object):
         # Log generated keys
         rqt_key = "".join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
         rsp_key = "".join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
-        LOGGER.debug("Generated request key: %s, response key: %s", rqt_key, rsp_key)
+        LOGGER.debug(f"Generated request key: {rqt_key}, response key: {rsp_key}")
+        LOGGER.debug(f"Request data size: {len(req_data)} bytes")
 
         lib = self.gethprestchifhandle()
 
@@ -793,15 +806,12 @@ class BlobStore2(object):
             ptr = lib.get_security_state()
             data = ptr[: lib.size_of_securityStateRequest()]
             data = bytearray(data)
-            LOGGER.debug("Received raw security state data of size: %d", len(data))
 
             # Send and receive raw data
             resp = self._send_receive_raw(data)
-            LOGGER.debug("Raw response received: %s", resp)
 
             # Extract the error code from the response
             errorcode = struct.unpack("<I", bytes(resp[8:12]))[0]
-            LOGGER.debug("Received error code: %d", errorcode)
 
             # Check for errors and raise exceptions if needed
             if not (errorcode == BlobReturnCodes.SUCCESS or errorcode == BlobReturnCodes.NOTMODIFIED):
@@ -812,7 +822,7 @@ class BlobStore2(object):
             try:
                 securitystate = struct.unpack("<c", bytes(resp[72]))[0]
                 LOGGER.debug("Security state extracted as character: %s", securitystate)
-            except Exception as e:
+            except Exception:
                 # Fallback for non-character extraction (may be an integer)
                 securitystate = int(resp[72])
                 LOGGER.debug("Failed to extract character. Security state interpreted as integer: %d", securitystate)
@@ -1038,8 +1048,17 @@ class BlobStore2(object):
 
         for attempt in range(1, 4):  # 3 attempts
             try:
-                LOGGER.debug("Attempt %d: Sending data to iLO.", attempt)
+                LOGGER.debug(f"Attempt {attempt}: Sending data to iLO. Data size: {len(indata)} bytes")
                 resp = self.channel.send_receive_raw(indata, 10)
+
+                # Log response details
+                errorcode = None
+                if len(resp) >= 12:
+                    errorcode = struct.unpack("<I", bytes(resp[8:12]))[0]
+                    LOGGER.debug(
+                        f"Response details - Size: {len(resp)} bytes, Error Code: {errorcode}, "
+                        f"Headers: {resp[:8].hex()}"
+                    )
                 LOGGER.info("Data successfully sent and received on attempt %d.", attempt)
                 return resp
             except Exception as exp:
@@ -1189,8 +1208,13 @@ class BlobStore2(object):
                     LOGGER.warning("Password is missing while username is provided.")
                     return False  # Invalid credentials
 
-                if dll.ChifIsSecurityRequired() > 0:
+                # Check security level requirement
+                LOGGER.debug("Checking iLO security requirements")
+                security_level = dll.ChifIsSecurityRequired()
+                LOGGER.debug(f"Security level check returned: {security_level}")
+                if security_level > 0:
                     LOGGER.info("High security mode detected. Authenticating credentials.")
+                    LOGGER.debug(f"Security requirements: Username={username}, High Security Mode=True")
 
                     dll.initiate_credentials.argtypes = [c_char_p, c_char_p]
                     dll.initiate_credentials.restype = POINTER(c_ubyte)
