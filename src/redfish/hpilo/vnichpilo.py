@@ -33,6 +33,7 @@ from ctypes import (
 
 from redfish.hpilo.risblobstore2 import BlobStore2
 from redfish.hpilo.rishpilo import BlobReturnCodes
+from redfish.log_utils import RestDebugLogRotator
 
 
 # ---------End of imports---------
@@ -66,6 +67,13 @@ class RemoveAccountError(Exception):
 
 class AppAccountExistsError(Exception):
     """Raised when errors occured while removing app account"""
+
+    pass
+
+
+class OrphanedAppAccountError(RemoveAccountError):
+    """Raised when the app account exists in iLO but not in TPM (e.g. after TPM clear).
+    Credentials are required to remove the orphaned iLO account."""
 
     pass
 
@@ -122,6 +130,9 @@ class AppAccount(object):
         )
 
         if log_dir and LOGGER.isEnabledFor(logging.DEBUG):
+            # Rotate rest.debug.log if it exceeds size threshold
+            RestDebugLogRotator.rotate_rest_debug_log(log_dir, max_size_mb=2.0, max_backups=3)
+
             logdir_c = create_string_buffer(log_dir.encode("utf-8"))
             self.dll.enabledebugoutput(logdir_c)
             LOGGER.info("Debug output enabled. Logs stored in: %s", log_dir)
@@ -221,6 +232,32 @@ class AppAccount(object):
             self.dll.DeleteAppToken.argtypes = [c_char_p, c_char_p, c_char_p]
             self.dll.DeleteAppToken.restype = c_int
             returncode = self.dll.DeleteAppToken(self.appid, self.appname, self.salt)
+
+            # When TPM has been cleared the local token is gone, but the account may
+            # still exist in iLO (orphaned). DeleteAppToken cannot authenticate in that
+            # state, so detect the condition and surface a specific error so the caller
+            # can advise the user to re-run with credentials to finish the cleanup.
+            if returncode != BlobReturnCodes.SUCCESS:
+                LOGGER.warning(
+                    "DeleteAppToken failed (code: %d). TPM may have been cleared. "
+                    "Checking whether the account is orphaned in iLO.",
+                    returncode,
+                )
+                try:
+                    exists_in_tpm = self.apptoken_exists()
+                except AppAccountExistsError:
+                    exists_in_tpm = True  # check failed; assume token is present, raise generic error below
+                if not exists_in_tpm:
+                    LOGGER.error(
+                        "App account is not present in TPM but may still exist in iLO. "
+                        "Re-run the delete command with --username / --password to remove "
+                        "the orphaned iLO account."
+                    )
+                    raise OrphanedAppAccountError(
+                        "App account token was not found in TPM (TPM may have been cleared). "
+                        "The account may still exist in iLO. "
+                        "Re-run with credentials to remove it."
+                    )
 
         LOGGER.debug(f"Delete operation returned code: {returncode}")
 
@@ -402,8 +439,14 @@ class AppAccount(object):
             byref(in_tpm_ptr),
             byref(in_ilo_ptr),
         )
-        if returncode != BlobReturnCodes.SUCCESS:
-            LOGGER.error("Error occurred in CompareAppIds. Return Code: %d", returncode)
+        if returncode == -62:
+            LOGGER.debug("AppAccount is inactive. Please run the appaccount reactivate command.")
+            raise InactiveAppAccountTokenError()
+        elif returncode == -8:
+            LOGGER.debug("No app accounts found. CompareAppIds Return Code: %d", returncode)
+            return []
+        elif returncode != BlobReturnCodes.SUCCESS:
+            LOGGER.debug("Error occurred in CompareAppIds. Return Code: %d", returncode)
             raise AppIdListError("Error occurred while retrieving App Id information.\n")
 
         LOGGER.info("CompareAppIds executed successfully. Number of App IDs: %d", app_id_count.value)

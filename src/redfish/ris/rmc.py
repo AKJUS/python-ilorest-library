@@ -67,7 +67,7 @@ from redfish.ris.utils import (
     warning_handler,
 )
 from redfish.ris.validation import Typepathforval, ValidationManager
-from redfish.hpilo.vnichpilo import AppAccount
+from redfish.hpilo.vnichpilo import AppAccount, AppIdListError
 
 # ---------End of imports---------
 
@@ -1805,6 +1805,8 @@ class RmcApp(object):
 
     def ListAppIds(self, app_obj):
         appid_list_info = app_obj.CompareAppIds()
+        if not appid_list_info:
+            raise AppIdListError("There are no app accounts.\n")
         return appid_list_info
 
     def ExpandAppId(self, app_obj, appid):

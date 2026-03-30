@@ -401,7 +401,7 @@ class Blobstore2Connection(object):
         log_dir = kwargs.pop("log_dir", "")
         try:
             correctcreds = BlobStore2.initializecreds(username=username, password=password, log_dir=log_dir)
-            bs2 = BlobStore2()
+            bs2 = BlobStore2(log_dir=log_dir, username=username, password=password)
             if not correctcreds:
                 security_state = int(bs2.get_security_state())
                 if security_state == 3:

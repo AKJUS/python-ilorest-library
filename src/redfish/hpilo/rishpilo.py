@@ -25,6 +25,8 @@ import struct
 import time
 from ctypes import byref, c_uint32, c_char_p, c_void_p, create_string_buffer
 
+from redfish.log_utils import RestDebugLogRotator
+
 # ---------End of imports---------
 # ---------Debug logger---------
 
@@ -116,6 +118,9 @@ class HpIlo(object):
             LOGGER.debug("Initializing with DLL: %s and log directory: %s", dll, log_dir)
             self.dll.enabledebugoutput.argtypes = [c_char_p]
             if log_dir is not None:
+                # Rotate rest.debug.log if it exceeds size threshold
+                RestDebugLogRotator.rotate_rest_debug_log(log_dir, max_size_mb=2.0, max_backups=3)
+
                 logdir_c = create_string_buffer(log_dir.encode("UTF-8"))
                 LOGGER.debug("Enabling debug output with log directory: %s", log_dir)
                 self.dll.enabledebugoutput(logdir_c)

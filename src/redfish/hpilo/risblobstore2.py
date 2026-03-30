@@ -37,6 +37,7 @@ from redfish.hpilo.rishpilo import (
     HpIloChifPacketExchangeError,
     HpIloInitialError,
 )
+from redfish.log_utils import RestDebugLogRotator
 
 if os.name == "nt":
     from ctypes import windll
@@ -170,10 +171,22 @@ class BlobReturnCodes(object):
 class BlobStore2(object):
     """Blob store 2 class"""
 
-    def __init__(self, log_dir=None):
+    def __init__(self, log_dir=None, username=None, password=None):
         lib = self.gethprestchifhandle()
         self.log_dir = log_dir
+
         self.channel = HpIlo(dll=lib, log_dir=log_dir)
+
+        # Set credentials after channel creation so HpIlo's internal ChifInitialize
+        # doesn't wipe them out. Ping usually passes without creds.
+        if username and password:
+            lib.initiate_credentials.argtypes = [c_char_p, c_char_p]
+            lib.initiate_credentials.restype = POINTER(c_ubyte)
+            usernew = create_string_buffer(username.encode("utf-8"))
+            passnew = create_string_buffer(password.encode("utf-8"))
+            lib.initiate_credentials(usernew, passnew)
+            LOGGER.debug("Credentials set after BlobStore2 channel creation")
+
         self.max_retries = 44
         self.max_read_retries = 3
         self.delay = 0.25
@@ -199,6 +212,7 @@ class BlobStore2(object):
         """
         LOGGER.info("Attempting to create blob: Key=%s, Namespace=%s", key, namespace)
 
+        lib = None
         try:
             lib = self.gethprestchifhandle()
             lib.create_not_blobentry.argtypes = [c_char_p, c_char_p]
@@ -231,7 +245,8 @@ class BlobStore2(object):
 
         finally:
             LOGGER.debug("Unloading library handle")
-            self.unloadchifhandle(lib)
+            if lib is not None:
+                self.unloadchifhandle(lib)
 
     def get_info(self, key, namespace, retries=0):
         """Get information for a particular blob.
@@ -255,6 +270,7 @@ class BlobStore2(object):
         data = ptr[: lib.size_of_infoRequest()]
         data = bytearray(data)
         delay = self.delay
+        resp = None
         while retries <= self.max_retries:
             LOGGER.debug(f"Attempt {retries+1}/{self.max_retries} - Sending request to iLO.")
 
@@ -553,6 +569,7 @@ class BlobStore2(object):
         data = ptr[: lib.size_of_deleteRequest()]
         data = bytearray(data)
         delay = self.delay
+        errorcode = None
         while retries <= self.max_retries:
             LOGGER.debug(f"Attempt {retries + 1} of {self.max_retries}: Sending raw delete request.")
 
@@ -1066,7 +1083,13 @@ class BlobStore2(object):
                 self.channel.close()
                 LOGGER.info("Reinitializing communication channel with iLO.")
                 lib = self.gethprestchifhandle()
-                self.channel = HpIlo(dll=lib)
+
+                self.channel = HpIlo(dll=lib, log_dir=self.log_dir)
+
+                # Note: Credentials cannot be restored here after channel reinit.
+                # If high-security mode requires credentials, the operation may fail.
+                # Consider passing credentials explicitly to BlobStore2 constructor.
+
                 excp = exp  # Store last exception for final raise
 
         LOGGER.error("All attempts to send/receive raw data have failed.")
@@ -1174,6 +1197,15 @@ class BlobStore2(object):
         """
         Initialize Chif and handle high-security credentials.
 
+        SECURITY NOTE: This method does NOT cache credentials to avoid security risks.
+        Credentials are only used for initialization and verification, then discarded.
+
+        For applications that need to maintain state (e.g., long-running services),
+        credentials should be passed explicitly to each BlobStore2 constructor call.
+
+        For CLI tools that launch fresh each time (e.g., ilorest), credential caching
+        would provide no benefit since the process memory is cleared on exit anyway.
+
         :param username: The username to login.
         :type username: str
         :param password: The password to login.
@@ -1189,11 +1221,15 @@ class BlobStore2(object):
         LOGGER.info("Initializing Chif credentials with security settings.")
         LOGGER.debug("Username provided: %s, Log directory: %s", username, log_dir)
 
+        dll = None
         try:
             dll = BlobStore2.gethprestchifhandle()
 
             # Enable debug output if LOGGER level is DEBUG
             if LOGGER.isEnabledFor(logging.DEBUG) and log_dir:
+                # Rotate rest.debug.log if it exceeds size threshold
+                RestDebugLogRotator.rotate_rest_debug_log(log_dir, max_size_mb=2.0, max_backups=3)
+    
                 logdir_c = create_string_buffer(log_dir.encode("utf-8"))
                 LOGGER.debug("Enabling debug output to directory: %s", log_dir)
                 dll.enabledebugoutput(logdir_c)
@@ -1228,6 +1264,8 @@ class BlobStore2(object):
                     credreturn = dll.ChifVerifyCredentials()
                     if credreturn == BlobReturnCodes.SUCCESS:
                         LOGGER.info("Credentials verified successfully.")
+                        # Note: Credentials are NOT cached for security reasons.
+                        # Applications should pass credentials explicitly to BlobStore2 constructor.
                     elif credreturn == hpiloreturncodes.CHIFERR_AccessDenied:
                         LOGGER.error("Access Denied: Invalid credentials.")
                         raise Blob2SecurityError()
@@ -1254,7 +1292,8 @@ class BlobStore2(object):
 
         finally:
             LOGGER.debug("Unloading Chif handle.")
-            BlobStore2.unloadchifhandle(dll)
+            if dll is not None:
+                BlobStore2.unloadchifhandle(dll)
 
     @staticmethod
     def checkincurrdirectory(libname):
